@@ -1,10 +1,14 @@
+import logging
 from asyncio import CancelledError, InvalidStateError, Task
-from typing import Optional
+from typing import Optional, Type
+
 from cadence._internal.workflow.deterministic_event_loop import DeterministicEventLoop
 from cadence.api.v1.common_pb2 import Payload
 from cadence.data_converter import DataConverter
 from cadence.error import WorkflowFailure
 from cadence.workflow import WorkflowDefinition
+
+logger = logging.getLogger(__name__)
 
 
 class WorkflowInstance:
@@ -28,6 +32,72 @@ class WorkflowInstance:
                 self._data_converter, payload
             )
             self._task = self._loop.create_task(run_method(*workflow_input))
+
+    def handle_signal(
+        self, signal_name: str, payload: Payload, event_id: int
+    ) -> None:
+        """Handle an incoming signal by invoking the registered signal handler.
+
+        Looks up the signal definition by name, decodes the payload using the
+        data converter and parameter type hints, and invokes the handler on the
+        workflow instance. Async handlers are scheduled as tasks on the
+        deterministic event loop so they execute during run_once().
+
+        Args:
+            signal_name: The name of the signal to handle.
+            payload: The encoded signal input payload.
+            event_id: The history event ID (used for logging context).
+        """
+        # Guard: reject signals after workflow completion (matches Java client)
+        if self.is_done():
+            logger.warning(
+                "Signal received after workflow is completed, ignoring",
+                extra={"signal_name": signal_name, "event_id": event_id},
+            )
+            return
+
+        signal_def = self._definition.signals.get(signal_name)
+        if signal_def is None:
+            logger.warning(
+                "Received signal with no registered handler, ignoring",
+                extra={"signal_name": signal_name, "event_id": event_id},
+            )
+            return
+
+        # Decode payload using parameter type hints from the signal definition.
+        # Deserialization errors are caught and logged rather than crashing the
+        # decision (matches Java client DataConverterException handling).
+        type_hints: list[Type | None] = [p.type_hint for p in signal_def.params]
+        try:
+            if type_hints:
+                decoded_args = self._data_converter.from_data(payload, type_hints)
+            else:
+                decoded_args = []
+        except Exception:
+            logger.error(
+                "Failed to deserialize signal payload, dropping signal",
+                extra={"signal_name": signal_name, "event_id": event_id},
+                exc_info=True,
+            )
+            return
+
+        # Invoke the handler on the workflow instance.
+        # signal_def._wrapped is the unbound class method, so we pass
+        # self._instance as the first argument.
+        # Handler invocation errors are caught and logged rather than crashing
+        # the decision task (matches Java client InvocationTargetException handling).
+        try:
+            if signal_def.is_async:
+                coro = signal_def(self._instance, *decoded_args)
+                self._loop.create_task(coro)
+            else:
+                signal_def(self._instance, *decoded_args)
+        except Exception:
+            logger.error(
+                "Signal handler raised an exception",
+                extra={"signal_name": signal_name, "event_id": event_id},
+                exc_info=True,
+            )
 
     def run_once(self):
         self._loop.run_until_yield()

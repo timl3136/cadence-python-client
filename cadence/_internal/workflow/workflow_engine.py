@@ -184,9 +184,11 @@ class WorkflowEngine:
                         "replay_mode": decision_events.replay,
                     },
                 )
+                event_attr_name = event.WhichOneof("attributes")
+
                 # start workflow on workflow started event
                 if (
-                    event.WhichOneof("attributes")
+                    event_attr_name
                     == "workflow_execution_started_event_attributes"
                 ):
                     started_attrs: WorkflowExecutionStartedEventAttributes = (
@@ -194,6 +196,20 @@ class WorkflowEngine:
                     )
                     if started_attrs and hasattr(started_attrs, "input"):
                         self._workflow_instance.start(started_attrs.input)
+
+                # invoke signal handler on signal event
+                elif (
+                    event_attr_name
+                    == "workflow_execution_signaled_event_attributes"
+                ):
+                    signaled_attrs = (
+                        event.workflow_execution_signaled_event_attributes
+                    )
+                    self._workflow_instance.handle_signal(
+                        signaled_attrs.signal_name,
+                        signaled_attrs.input,
+                        event.event_id,
+                    )
 
                 # Process through state machines (DecisionsHelper now delegates to DecisionManager)
                 self._decision_manager.handle_history_event(event)
