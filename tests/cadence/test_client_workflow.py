@@ -1,6 +1,7 @@
 import pytest
 import uuid
-from datetime import timedelta
+import warnings
+from datetime import timedelta, datetime, timezone
 from unittest.mock import AsyncMock, Mock, PropertyMock
 
 from cadence.api.v1.common_pb2 import WorkflowExecution
@@ -240,6 +241,75 @@ class TestClientBuildStartWorkflowRequest:
         request = client._build_start_workflow_request("TestWorkflow", (), options)
 
         assert request.cron_schedule == "0 * * * *"
+
+    @pytest.mark.asyncio
+    async def test_build_request_with_first_run_at_timezone_aware(self, mock_client):
+        """Test building request with timezone-aware first_run_at."""
+        client = Client(domain="test-domain", target="localhost:7933")
+
+        first_run = datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+        options = StartWorkflowOptions(
+            task_list="test-task-list",
+            execution_start_to_close_timeout=timedelta(minutes=10),
+            task_start_to_close_timeout=timedelta(seconds=30),
+            cron_schedule="0 * * * *",
+            first_run_at=first_run,
+        )
+
+        request = client._build_start_workflow_request("TestWorkflow", (), options)
+
+        assert request.HasField("first_run_at")
+        # Convert back and verify
+        result_dt = request.first_run_at.ToDatetime()
+        assert result_dt == first_run.replace(
+            tzinfo=None
+        )  # ToDatetime returns naive UTC
+
+    @pytest.mark.asyncio
+    async def test_build_request_with_first_run_at_naive(self, mock_client):
+        """Test building request with timezone-naive first_run_at."""
+        client = Client(domain="test-domain", target="localhost:7933")
+
+        first_run = datetime(2024, 6, 1, 12, 0, 0)  # Naive datetime
+
+        options = StartWorkflowOptions(
+            task_list="test-task-list",
+            execution_start_to_close_timeout=timedelta(minutes=10),
+            task_start_to_close_timeout=timedelta(seconds=30),
+            first_run_at=first_run,
+        )
+
+        request = client._build_start_workflow_request("TestWorkflow", (), options)
+
+        assert request.HasField("first_run_at")
+
+    def test_first_run_at_naive_datetime_warns(self):
+        """Test that timezone-naive first_run_at produces warning."""
+        options = StartWorkflowOptions(
+            task_list="test-task-list",
+            execution_start_to_close_timeout=timedelta(minutes=10),
+            first_run_at=datetime(2024, 1, 1, 12, 0, 0),  # Naive
+        )
+        with pytest.warns(UserWarning, match="timezone-naive"):
+            _validate_and_apply_defaults(options)
+
+    def test_first_run_at_aware_datetime_no_warning(self):
+        """Test that timezone-aware first_run_at produces no warning."""
+        options = StartWorkflowOptions(
+            task_list="test-task-list",
+            execution_start_to_close_timeout=timedelta(minutes=10),
+            first_run_at=datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+        )
+        # Should not warn - use warnings.catch_warnings to verify
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            _validate_and_apply_defaults(options)
+            # Filter for our specific warning
+            relevant_warnings = [
+                warning for warning in w if "timezone-naive" in str(warning.message)
+            ]
+            assert len(relevant_warnings) == 0
 
 
 class TestClientStartWorkflow:

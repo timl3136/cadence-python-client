@@ -1,11 +1,13 @@
 import os
 import socket
 import uuid
-from datetime import timedelta
+import warnings
+from datetime import datetime, timedelta
 from typing import TypedDict, Unpack, Any, cast, Union
 
 from grpc import ChannelCredentials, Compression
 from google.protobuf.duration_pb2 import Duration
+from google.protobuf.timestamp_pb2 import Timestamp
 
 from cadence._internal.rpc.error import CadenceErrorInterceptor
 from cadence._internal.rpc.retry import RetryInterceptor
@@ -36,6 +38,7 @@ class StartWorkflowOptions(TypedDict, total=False):
     workflow_id: str
     task_start_to_close_timeout: timedelta
     cron_schedule: str
+    first_run_at: datetime
 
 
 def _validate_and_apply_defaults(options: StartWorkflowOptions) -> StartWorkflowOptions:
@@ -55,6 +58,15 @@ def _validate_and_apply_defaults(options: StartWorkflowOptions) -> StartWorkflow
         options["task_start_to_close_timeout"] = timedelta(seconds=10)
     elif task_timeout <= timedelta(0):
         raise ValueError("task_start_to_close_timeout must be greater than 0")
+
+    # Warn if first_run_at is timezone-naive
+    first_run_at = options.get("first_run_at")
+    if first_run_at is not None and first_run_at.tzinfo is None:
+        warnings.warn(
+            "first_run_at is timezone-naive; it will be treated as UTC",
+            UserWarning,
+            stacklevel=3,
+        )
 
     return options
 
@@ -185,6 +197,13 @@ class Client:
             request.input.CopyFrom(input_payload)
         if options.get("cron_schedule"):
             request.cron_schedule = options["cron_schedule"]
+
+        # Set first_run_at if provided
+        first_run_at = options.get("first_run_at")
+        if first_run_at is not None:
+            first_run_timestamp = Timestamp()
+            first_run_timestamp.FromDatetime(first_run_at)
+            request.first_run_at.CopyFrom(first_run_timestamp)
 
         return request
 
