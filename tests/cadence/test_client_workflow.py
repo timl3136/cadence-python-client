@@ -311,6 +311,29 @@ class TestClientBuildStartWorkflowRequest:
             ]
             assert len(relevant_warnings) == 0
 
+    def test_first_run_at_before_epoch_raises_error(self):
+        """Test that first_run_at before Unix epoch raises ValueError."""
+        options = StartWorkflowOptions(
+            task_list="test-task-list",
+            execution_start_to_close_timeout=timedelta(minutes=10),
+            first_run_at=datetime(1960, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+        )
+        with pytest.raises(ValueError, match="cannot be before Unix epoch"):
+            _validate_and_apply_defaults(options)
+
+    def test_first_run_at_at_epoch_is_valid(self):
+        """Test that first_run_at exactly at Unix epoch is valid."""
+        options = StartWorkflowOptions(
+            task_list="test-task-list",
+            execution_start_to_close_timeout=timedelta(minutes=10),
+            first_run_at=datetime(1970, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+        )
+        # Should not raise
+        validated = _validate_and_apply_defaults(options)
+        assert validated["first_run_at"] == datetime(
+            1970, 1, 1, 0, 0, 0, tzinfo=timezone.utc
+        )
+
 
 class TestClientStartWorkflow:
     """Test Client.start_workflow method."""

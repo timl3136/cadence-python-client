@@ -59,14 +59,20 @@ def _validate_and_apply_defaults(options: StartWorkflowOptions) -> StartWorkflow
     elif task_timeout <= timedelta(0):
         raise ValueError("task_start_to_close_timeout must be greater than 0")
 
-    # Warn if first_run_at is timezone-naive
+    # Warn if first_run_at is timezone-naive, and validate it's not before Unix epoch
     first_run_at = options.get("first_run_at")
-    if first_run_at is not None and first_run_at.tzinfo is None:
-        warnings.warn(
-            "first_run_at is timezone-naive; it will be treated as UTC",
-            UserWarning,
-            stacklevel=3,
-        )
+    if first_run_at is not None:
+        if first_run_at.tzinfo is None:
+            warnings.warn(
+                "first_run_at is timezone-naive; it will be treated as UTC",
+                UserWarning,
+                stacklevel=3,
+            )
+        # Validate timestamp is not before Unix epoch (matching Go client behavior)
+        if first_run_at.timestamp() < 0:
+            raise ValueError(
+                "first_run_at cannot be before Unix epoch (January 1, 1970 UTC)"
+            )
 
     return options
 
