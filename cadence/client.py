@@ -1,7 +1,6 @@
 import os
 import socket
 import uuid
-import warnings
 from datetime import datetime, timedelta
 from typing import TypedDict, Unpack, Any, cast, Union
 
@@ -59,14 +58,14 @@ def _validate_and_apply_defaults(options: StartWorkflowOptions) -> StartWorkflow
     elif task_timeout <= timedelta(0):
         raise ValueError("task_start_to_close_timeout must be greater than 0")
 
-    # Warn if first_run_at is timezone-naive, and validate it's not before Unix epoch
+    # Validate first_run_at (must be timezone-aware and not before Unix epoch)
     first_run_at = options.get("first_run_at")
     if first_run_at is not None:
+        # Require timezone-aware datetime to prevent ambiguity
         if first_run_at.tzinfo is None:
-            warnings.warn(
-                "first_run_at is timezone-naive; it will be treated as UTC",
-                UserWarning,
-                stacklevel=3,
+            raise ValueError(
+                "first_run_at must be timezone-aware. "
+                "Use datetime.now(timezone.utc) or datetime(..., tzinfo=timezone.utc)"
             )
         # Validate timestamp is not before Unix epoch (matching Go client behavior)
         if first_run_at.timestamp() < 0:
